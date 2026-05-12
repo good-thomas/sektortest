@@ -37,7 +37,7 @@ def audit():
             else:
                 data = raw_data
         
-        data = data.resample('M').last()
+        data = data.resample('ME').last()
         results = []
         
         for ticker in ticker_list:
