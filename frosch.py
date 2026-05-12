@@ -13,12 +13,13 @@ def fetch_with_retry(ticker, retries=3):
     """Versucht Daten zu laden und wartet bei Rate Limits kurz."""
     for i in range(retries):
         try:
+            # auto_adjust=True sorgt für saubere Kurse ohne 'Adj Close' Probleme
             df = yf.download(ticker, start="2010-01-01", progress=False, auto_adjust=True)
             if not df.empty:
                 return df
         except Exception as e:
             if "Too Many Requests" in str(e):
-                time.sleep(2) # 2 Sekunden warten
+                time.sleep(2)
                 continue
     return pd.DataFrame()
 
@@ -33,25 +34,32 @@ def audit():
     
     for ticker in ticker_list:
         try:
-            # Einzelabfrage pro Ticker ist in Cloud-Umgebungen oft stabiler
             data_raw = fetch_with_retry(ticker)
             
             if data_raw.empty:
                 continue
-                
-            # Spalten-Handling (Yahoo liefert manchmal 'Close' oder den Ticker-Namen)
+            
+            # WICHTIG: Sicherstellen, dass wir eine Series (Spalte) haben, nicht ein DataFrame
             if 'Close' in data_raw.columns:
                 prices = data_raw['Close']
             else:
-                prices = data_raw.iloc[:, 0] # Nimm die erste verfügbare Spalte
-                
+                prices = data_raw.iloc[:, 0]
+            
+            # Dein Fix: 'ME' statt 'M' für neue Pandas-Versionen
             prices = prices.resample('ME').last().dropna()
             
+            # Konvertierung zu Series erzwingen, damit .autocorr() sicher existiert
+            if isinstance(prices, pd.DataFrame):
+                prices = prices.iloc[:, 0]
+
             if len(prices) < 24:
                 continue
             
             rets = prices.pct_change().dropna()
+            
+            # Jetzt ist rets sicher eine Series -> .autocorr() funktioniert
             persistence_val = rets.autocorr(lag=1)
+            
             std_val = rets.std()
             snr_val = (rets.mean() * 12) / (std_val * np.sqrt(12)) if std_val > 0 else 0
             
@@ -71,11 +79,13 @@ def audit():
                 "status": str(status_text)
             })
         except Exception as e:
+            # Protokolliert den Fehler im Render-Log, bricht aber nicht ab
             print(f"Fehler bei {ticker}: {e}")
             continue
             
     if not results:
-        return jsonify({"error": "Rate Limit bei Yahoo Finance. Bitte in 1-2 Minuten nochmal versuchen."}), 429
+        # Wenn Yahoo blockiert, geben wir eine klare Meldung an das WordPress-Frontend
+        return jsonify({"error": "Yahoo Rate Limit. Bitte in 1 Min erneut versuchen."}), 429
         
     return jsonify(results)
 
