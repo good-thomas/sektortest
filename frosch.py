@@ -45,7 +45,7 @@ def audit():
             else:
                 prices = data_raw.iloc[:, 0] # Nimm die erste verfügbare Spalte
                 
-            prices = prices.resample('M').last().dropna()
+            prices = prices.resample('ME').last().dropna()
             
             if len(prices) < 24:
                 continue
