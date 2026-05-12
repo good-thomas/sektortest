@@ -56,6 +56,5 @@ def audit():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Port wird von Render vorgegeben
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000)) # Render nutzt oft Port 10000
     app.run(host="0.0.0.0", port=port)
