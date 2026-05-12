@@ -17,9 +17,10 @@ def audit():
     ticker_list = [t.strip().upper() for t in ticker_str.split(",") if t.strip()]
     
     try:
-        # Daten laden
+        # 1. Daten laden
         raw_data = yf.download(ticker_list, start="2010-01-01", progress=False)
         
+        # 2. Struktur korrigieren (yfinance liefert je nach Anzahl der Ticker andere Formate)
         if isinstance(raw_data.columns, pd.MultiIndex):
             data = raw_data['Adj Close']
         else:
@@ -40,34 +41,44 @@ def audit():
             if len(prices) < 24:
                 continue
             
+            # Renditen berechnen
             rets = prices.pct_change().dropna()
-            persistence = rets.autocorr(lag=1)
             
-            std = rets.std()
-            snr = (rets.mean() * 12) / (std * np.sqrt(12)) if std > 0 else 0
+            # --- METRIKEN ---
+            # Persistenz
+            persistence_val = rets.autocorr(lag=1)
             
+            # SNR
+            std_val = rets.std()
+            snr_val = (rets.mean() * 12) / (std_val * np.sqrt(12)) if std_val > 0 else 0
+            
+            # Frosch-Score (9M Momentum)
             mom9 = prices.pct_change(9)
             bull_signal = mom9.shift(1) > 0
             valid_months = rets[bull_signal]
             
-            hit_rate = 0
+            hit_rate_val = 0
             if not valid_months.empty:
-                hit_rate = valid_months[valid_months > 0].count() / valid_months.count()
+                hit_rate_val = valid_months[valid_months > 0].count() / valid_months.count()
             
-            status = "ROBUST" if persistence > 0.10 and snr > 0.4 else "HEKTISCH"
-            if persistence < 0: status = "GEFÄHRLICH"
+            # Status bestimmen
+            status_text = "ROBUST" if persistence_val > 0.10 and snr_val > 0.4 else "HEKTISCH"
+            if persistence_val < 0: status_text = "GEFÄHRLICH"
 
+            # WICHTIG: Jede Zahl explizit in Standard-Python float umwandeln
+            # JSON kann kein NumPy (float64), was oft den 500er Fehler auslöst
             results.append({
-                "ticker": ticker,
-                "persistence": round(float(persistence), 3) if not np.isnan(persistence) else 0,
-                "snr": round(float(snr), 3) if not np.isnan(snr) else 0,
-                "frosch_score": round(float(hit_rate), 2),
-                "status": status
+                "ticker": str(ticker),
+                "persistence": float(round(persistence_val, 3)) if pd.notnull(persistence_val) else 0.0,
+                "snr": float(round(snr_val, 3)) if pd.notnull(snr_val) else 0.0,
+                "frosch_score": float(round(hit_rate_val, 2)) if pd.notnull(hit_rate_val) else 0.0,
+                "status": str(status_text)
             })
         
         return jsonify(results)
     
     except Exception as e:
+        # Gibt den exakten Fehler an WordPress zurück, falls es doch kracht
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
