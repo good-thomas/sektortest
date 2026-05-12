@@ -1,6 +1,6 @@
-pandas
-numpy
-yfinance
 flask
 flask-cors
 gunicorn
+pandas
+numpy
+yfinance
