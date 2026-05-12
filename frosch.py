@@ -13,7 +13,6 @@ def fetch_with_retry(ticker, retries=3):
     """Versucht Daten zu laden und wartet bei Rate Limits kurz."""
     for i in range(retries):
         try:
-            # auto_adjust=True sorgt für saubere Kurse ohne 'Adj Close' Probleme
             df = yf.download(ticker, start="2010-01-01", progress=False, auto_adjust=True)
             if not df.empty:
                 return df
@@ -39,37 +38,58 @@ def audit():
             if data_raw.empty:
                 continue
             
-            # WICHTIG: Sicherstellen, dass wir eine Series (Spalte) haben, nicht ein DataFrame
+            # Preis-Spalte extrahieren
             if 'Close' in data_raw.columns:
                 prices = data_raw['Close']
             else:
                 prices = data_raw.iloc[:, 0]
             
-            # Dein Fix: 'ME' statt 'M' für neue Pandas-Versionen
+            # Monatliche Daten (ME = Month End)
             prices = prices.resample('ME').last().dropna()
             
-            # Konvertierung zu Series erzwingen, damit .autocorr() sicher existiert
             if isinstance(prices, pd.DataFrame):
                 prices = prices.iloc[:, 0]
 
             if len(prices) < 24:
                 continue
             
+            # Renditen berechnen
             rets = prices.pct_change().dropna()
             
-            # Jetzt ist rets sicher eine Series -> .autocorr() funktioniert
+            # --- GEWICHTETE MOMENTUM-LOGIK (30% 9M / 70% 12M) ---
+            mom9 = prices.pct_change(9)
+            mom12 = prices.pct_change(12)
+            
+            # Kombiniertes Signal berechnen
+            combined_signal = (0.3 * mom9) + (0.7 * mom12)
+            
+            # Signal um einen Monat verschieben (Entscheidung am Monatsende für den Folgemonat)
+            bull_signal = combined_signal.shift(1) > 0
+            
+            # Nur Monate betrachten, in denen das kombinierte Signal "Go" gesagt hätte
+            valid_months = rets[bull_signal]
+            
+            # Frosch-Score (Trefferquote im Folgemonat)
+            hit_rate_val = 0
+            if not valid_months.empty:
+                hit_rate_val = valid_months[valid_months > 0].count() / valid_months.count()
+            
+            # Persistenz (Autokorrelation)
             persistence_val = rets.autocorr(lag=1)
             
+            # Signal-to-Noise Ratio (SNR)
             std_val = rets.std()
             snr_val = (rets.mean() * 12) / (std_val * np.sqrt(12)) if std_val > 0 else 0
             
-            mom9 = prices.pct_change(9)
-            bull_signal = mom9.shift(1) > 0
-            valid_months = rets[bull_signal]
-            hit_rate_val = valid_months[valid_months > 0].count() / valid_months.count() if not valid_months.empty else 0
-            
-            status_text = "ROBUST" if persistence_val > 0.10 and snr_val > 0.4 else "HEKTISCH"
-            if persistence_val < 0: status_text = "GEFÄHRLICH"
+            # --- VERFEINERTE STATUS-LOGIK ---
+            if persistence_val < 0:
+                status_text = "GEFÄHRLICH"
+            elif persistence_val < 0.05:
+                status_text = "HEKTISCH"
+            elif persistence_val < 0.10:
+                status_text = "GRENZWERTIG"
+            else:
+                status_text = "ROBUST"
 
             results.append({
                 "ticker": str(ticker),
@@ -79,13 +99,11 @@ def audit():
                 "status": str(status_text)
             })
         except Exception as e:
-            # Protokolliert den Fehler im Render-Log, bricht aber nicht ab
             print(f"Fehler bei {ticker}: {e}")
             continue
             
     if not results:
-        # Wenn Yahoo blockiert, geben wir eine klare Meldung an das WordPress-Frontend
-        return jsonify({"error": "Yahoo Rate Limit. Bitte in 1 Min erneut versuchen."}), 429
+        return jsonify({"error": "Keine Ergebnisse. Möglicherweise Rate Limit."}), 429
         
     return jsonify(results)
 
