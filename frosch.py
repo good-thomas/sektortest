@@ -17,37 +17,58 @@ def audit():
     
     ticker_list = [t.strip().upper() for t in ticker_str.split(",") if t.strip()]
     
-    try:
+try:
         # Daten laden
-        data = yf.download(ticker_list, start="2010-01-01", progress=False)['Adj Close']
-        if len(ticker_list) == 1:
-            data = data.to_frame(name=ticker_list[0])
+        raw_data = yf.download(ticker_list, start="2010-01-01", progress=False)
         
+        # WICHTIG: Sicherstellen, dass wir nur die 'Adj Close' Spalte haben
+        if isinstance(raw_data.columns, pd.MultiIndex):
+            # Wenn mehrere Ticker: yfinance gibt MultiIndex zurück
+            data = raw_data['Adj Close']
+        else:
+            # Wenn nur ein Ticker: yfinance gibt normales DataFrame zurück
+            if 'Adj Close' in raw_data.columns:
+                data = raw_data[['Adj Close']]
+                data.columns = ticker_list # Spalte umbenennen für Konsistenz
+            else:
+                data = raw_data
+        
+        # Monatliches Resampling
         data = data.resample('M').last()
         results = []
         
         for ticker in ticker_list:
-            if ticker not in data.columns: continue
+            # Sicherstellen, dass der Ticker in den Daten existiert
+            if ticker not in data.columns:
+                continue
+                
             prices = data[ticker].dropna()
-            if len(prices) < 24: continue
+            if len(prices) < 24:
+                continue
             
             rets = prices.pct_change().dropna()
             persistence = rets.autocorr(lag=1)
-            snr = (rets.mean() * 12) / (rets.std() * np.sqrt(12))
+            
+            # Fehlervermeidung bei SNR Berechnung
+            std = rets.std()
+            snr = (rets.mean() * 12) / (std * np.sqrt(12)) if std > 0 else 0
             
             mom9 = prices.pct_change(9)
             bull_signal = mom9.shift(1) > 0
             valid_months = rets[bull_signal]
-            hit_rate = valid_months[valid_months > 0].count() / valid_months.count() if valid_months.count() > 0 else 0
+            
+            hit_rate = 0
+            if not valid_months.empty:
+                hit_rate = valid_months[valid_months > 0].count() / valid_months.count()
             
             status = "ROBUST" if persistence > 0.10 and snr > 0.4 else "HEKTISCH"
             if persistence < 0: status = "GEFÄHRLICH"
 
             results.append({
                 "ticker": ticker,
-                "persistence": round(persistence, 3),
-                "snr": round(snr, 3),
-                "frosch_score": round(hit_rate, 2),
+                "persistence": round(float(persistence), 3) if not np.isnan(persistence) else 0,
+                "snr": round(float(snr), 3) if not np.isnan(snr) else 0,
+                "frosch_score": round(float(hit_rate), 2),
                 "status": status
             })
         
