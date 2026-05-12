@@ -1,3 +1,6 @@
 pandas
 numpy
 yfinance
+flask
+flask-cors
+gunicorn
