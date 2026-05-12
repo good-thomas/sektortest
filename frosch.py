@@ -12,49 +12,47 @@ CORS(app)
 def fetch_with_retry(ticker, retries=3):
     for i in range(retries):
         try:
+            # Einzelabfrage ist oft stabiler gegen Format-Fehler
             df = yf.download(ticker, start="2010-01-01", progress=False, auto_adjust=True)
             if not df.empty:
                 return df
         except Exception:
             time.sleep(2)
-            continue
     return pd.DataFrame()
 
 def get_hit_rate(prices, returns, months_back=None):
-    """Berechnet die Trefferquote für die 30/70 Regel in einem Zeitfenster."""
-    # Daten zuschneiden
-    if months_back:
-        # Wir brauchen genug Historie für das 12M Momentum
-        p_sub = prices.tail(months_back + 13) 
-        r_sub = returns.tail(months_back)
-    else:
-        p_sub = prices
-        r_sub = returns
-    
-    if len(p_sub) < 14: return 0.0
-    
-    # Momentum berechnen
-    m9 = p_sub.pct_change(9)
-    m12 = p_sub.pct_change(12)
-    combined = (0.3 * m9 + 0.7 * m12)
-    
-    # Das Signal einen Monat verschieben (Shift 1)
-    sig = combined.shift(1) > 0
-    
-    # Synchronisieren: Wir nehmen nur die Signale, die zu den Renditen passen
-    sig_aligned = sig.reindex(r_sub.index).fillna(False)
-    
-    # Nur Monate mit Kauf-Signal betrachten
-    valid_returns = r_sub[sig_aligned]
-    
-    if valid_returns.empty: 
-        return 0.0
+    """Berechnet die Trefferquote als reinen Zahlenwert."""
+    try:
+        if months_back:
+            p_sub = prices.tail(months_back + 13) 
+            r_sub = returns.tail(months_back)
+        else:
+            p_sub = prices
+            r_sub = returns
         
-    # Treffer zählen (Rendite > 0)
-    hits = (valid_returns > 0).sum()
-    total = len(valid_returns)
-    
-    return float(hits / total)
+        if len(p_sub) < 14: return 0.0
+        
+        # Momentum berechnen
+        m9 = p_sub.pct_change(9)
+        m12 = p_sub.pct_change(12)
+        combined = (0.3 * m9 + 0.7 * m12)
+        
+        # Signal des Vormonats
+        sig = combined.shift(1) > 0
+        sig_aligned = sig.reindex(r_sub.index).fillna(False)
+        
+        valid_returns = r_sub[sig_aligned]
+        
+        if len(valid_returns) == 0: 
+            return 0.0
+            
+        # Wir nutzen .values, um sicherzustellen, dass wir keine Pandas-Objekte mehr haben
+        hits = np.sum(valid_returns.values > 0)
+        total = len(valid_returns)
+        
+        return float(hits) / float(total)
+    except:
+        return 0.0
 
 @app.route("/audit", methods=["GET"])
 def audit():
@@ -70,40 +68,40 @@ def audit():
             data_raw = fetch_with_retry(ticker)
             if data_raw.empty: continue
             
-            # Preis-Spalte sicherstellen
-            if isinstance(data_raw, pd.DataFrame) and not data_raw.empty:
-                if 'Close' in data_raw.columns:
-                    prices = data_raw['Close']
-                else:
-                    prices = data_raw.iloc[:, 0]
+            # Spalten-Extraktion extrem sicher
+            if 'Close' in data_raw.columns:
+                prices = data_raw['Close']
             else:
-                continue
+                prices = data_raw.iloc[:, 0]
+            
+            # Sicherstellen, dass es eine Series ist, kein DataFrame
+            if isinstance(prices, pd.DataFrame):
+                prices = prices.iloc[:, 0]
 
             prices = prices.resample('ME').last().dropna()
             if len(prices) < 24: continue
             
-            # Renditen berechnen
             rets = prices.pct_change().dropna()
 
-            # Die 3 Frosch-Ebenen berechnen
-            h_score = get_hit_rate(prices, rets)          # Gesamt
-            r_score = get_hit_rate(prices, rets, 36)      # Recent (3Y)
-            f_score = get_hit_rate(prices, rets, 18)      # Fresh (18M)
+            # Scores berechnen
+            h = get_hit_rate(prices, rets)
+            r = get_hit_rate(prices, rets, 36)
+            f = get_hit_rate(prices, rets, 18)
 
-            # Status-Logik
+            # Status bestimmen
             status = "STABLE"
-            if f_score > h_score and f_score >= 0.6: status = "HOT"
-            if f_score < 0.5: status = "WEAK"
+            if f > h and f >= 0.6: status = "HOT"
+            elif f < 0.5: status = "WEAK"
 
             results.append({
-                "ticker": ticker,
-                "h_score": round(float(h_score), 2),
-                "r_score": round(float(r_score), 2),
-                "f_score": round(float(f_score), 2),
-                "status": status
+                "ticker": str(ticker),
+                "h_score": float(round(h, 2)),
+                "r_score": float(round(r, 2)),
+                "f_score": float(round(f, 2)),
+                "status": str(status)
             })
         except Exception as e:
-            print(f"Error {ticker}: {str(e)}")
+            print(f"Fehler bei {ticker}: {str(e)}")
             continue
             
     return jsonify(results)
