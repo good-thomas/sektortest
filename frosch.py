@@ -18,18 +18,21 @@ def audit():
     ticker_list = [t.strip().upper() for t in ticker_str.split(",") if t.strip()]
     
     try:
-        # 1. Daten laden (Wir fangen Fehler beim Download ab)
-        raw_data = yf.download(ticker_list, start="2010-01-01", progress=False)
+        # 1. Daten laden mit auto_adjust=True (bereinigt die Spaltenstruktur)
+        raw_data = yf.download(ticker_list, start="2010-01-01", progress=False, auto_adjust=True)
         
         if raw_data.empty:
-            return jsonify({"error": "Keine Daten von Yahoo Finance erhalten"}), 404
+            return jsonify({"error": "Keine Daten erhalten"}), 404
 
-        # 2. Struktur-Bereinigung
+        # 2. Robuste Spaltenwahl
+        # Wir suchen nach 'Close'. Bei mehreren Tickern ist es ein MultiIndex.
         if isinstance(raw_data.columns, pd.MultiIndex):
-            data = raw_data['Adj Close']
+            # Nimmt die 'Close' Ebene bei mehreren Tickern
+            data = raw_data['Close']
         else:
-            if 'Adj Close' in raw_data.columns:
-                data = raw_data[['Adj Close']]
+            # Bei nur einem Ticker ist es oft direkt die Spalte 'Close'
+            if 'Close' in raw_data.columns:
+                data = raw_data[['Close']]
                 data.columns = ticker_list
             else:
                 data = raw_data
@@ -47,15 +50,11 @@ def audit():
                     continue
                 
                 rets = prices.pct_change().dropna()
-                
-                # Persistenz
                 persistence_val = rets.autocorr(lag=1)
                 
-                # SNR
                 std_val = rets.std()
                 snr_val = (rets.mean() * 12) / (std_val * np.sqrt(12)) if std_val > 0 else 0
                 
-                # Frosch-Score
                 mom9 = prices.pct_change(9)
                 bull_signal = mom9.shift(1) > 0
                 valid_months = rets[bull_signal]
@@ -67,7 +66,6 @@ def audit():
                 status_text = "ROBUST" if persistence_val > 0.10 and snr_val > 0.4 else "HEKTISCH"
                 if persistence_val < 0: status_text = "GEFÄHRLICH"
 
-                # Konvertierung in Standard-Typen für JSON
                 results.append({
                     "ticker": str(ticker),
                     "persistence": float(round(persistence_val, 3)) if pd.notnull(persistence_val) else 0.0,
@@ -82,8 +80,7 @@ def audit():
         return jsonify(results)
     
     except Exception as e:
-        # Das gibt uns den vollen Fehler-Pfad im Render-Log aus
-        print("KRITISCHER FEHLER:")
+        print("KRITISCHER FEHLER IM AUDIT:")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
