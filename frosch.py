@@ -54,7 +54,9 @@ def audit():
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+# Ganz unten in frosch.py
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000)) # Render nutzt oft Port 10000
+    # Dieser Teil wird nur ausgeführt, wenn du python frosch.py lokal startest
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+# Gunicorn nutzt das 'app' Objekt direkt von oben
